@@ -5,8 +5,8 @@ import time
 import httpx
 import pandas as pd
 
-API_URL = "http://localhost:8000"
-HEADERS = {"x-api-key": "key-tenant-b"}
+API_URL = "https://smarthome-api-b2b.azurewebsites.net"
+HEADERS = {"x-tenant-id": "tenant_b"}
 NUM_REQUESTS = 80
 
 DATASET_PATH = "data/processed/SmartHome_Valuator_Dataset_CLEAN_processed.csv"
@@ -48,12 +48,12 @@ lock = threading.Lock()
 
 def send_request(payload: dict) -> None:
     try:
-        resp = httpx.post(f"{API_URL}/avaluo", json=payload, headers=HEADERS, timeout=30)
+        resp = httpx.post(f"{API_URL}/valorar", json=payload, headers=HEADERS, timeout=30)
         with lock:
-            results.append({"ok": resp.status_code == 200, "latencia_ms": resp.json().get("latencia_ms", 0)})
+            results.append({"ok": resp.status_code == 200, "precio": resp.json().get("precio_estimado", 0)})
     except Exception as e:
         with lock:
-            results.append({"ok": False, "latencia_ms": 0, "error": str(e)})
+            results.append({"ok": False, "precio": 0, "error": str(e)})
 
 
 def main():
@@ -76,7 +76,6 @@ def main():
                 "hurto_res_100k": random.uniform(50, 500),
                 "indice_seguridad": random.uniform(2, 9),
                 "acueducto_mes": random.uniform(50000, 300000),
-                "consumo_energia_kwh": random.uniform(80, 700),
                 "energia_mes": random.uniform(80000, 700000),
                 "admin_mensual": random.uniform(100000, 3000000),
                 "tipo_inmueble": random.choice(["Apartamento", "Casa", "Oficina"]),
@@ -99,16 +98,14 @@ def main():
 
     exitosos = sum(1 for r in results if r["ok"])
     fallidos = NUM_REQUESTS - exitosos
-    latencias = [r["latencia_ms"] for r in results if r["ok"] and r["latencia_ms"]]
-    avg_lat = sum(latencias) / len(latencias) if latencias else 0
-    max_lat = max(latencias) if latencias else 0
+    precios = [r["precio"] for r in results if r["ok"] and r["precio"]]
+    avg_precio = sum(precios) / len(precios) if precios else 0
 
     print("\n=== Tenant B (Portal Inmobiliario) — Resumen ===")
     print(f"  Total requests  : {NUM_REQUESTS}")
     print(f"  Exitosos        : {exitosos}")
     print(f"  Fallidos        : {fallidos}")
-    print(f"  Latencia prom.  : {avg_lat:.1f} ms")
-    print(f"  Latencia máx.   : {max_lat} ms")
+    print(f"  Precio prom.    : ${avg_precio:,.0f} COP")
     print(f"  Throughput      : {NUM_REQUESTS / elapsed:.1f} req/s")
 
 

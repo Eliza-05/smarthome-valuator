@@ -1,0 +1,20 @@
+﻿{
+  "tipo_operacion": "Venta",
+  "area_m2": 80,
+  "habitaciones": 3,
+  "banos": 2,
+  "antiguedad_anos": 10,
+  "estrato": 4,
+  "latitud": 4.65,
+  "longitud": -74.05,
+  "hurto_res_100k": 150,
+  "indice_seguridad": 6.5,
+  "acueducto_mes": 120000,
+  "energia_mes": 180000,
+  "admin_mensual": 400000,
+  "tipo_inmueble": "Apartamento",
+  "localidad": "Chapinero",
+  "upz": "El Refugio",
+  "parqueadero": 1,
+  "deposito": 0
+}

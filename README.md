@@ -1,6 +1,27 @@
 # SmartHome Valuator
 
-Plataforma analítica multi-tenant para valoración inmobiliaria residencial en Bogotá, Colombia. Sirve simultáneamente a múltiples organizaciones (bancos, portales inmobiliarios) sobre una infraestructura compartida con aislamiento de datos por cliente mediante schema-per-tenant en PostgreSQL.
+**Estudiantes:**
+- Elizabeth Correa Suarez
+- Juan Sebastián Ortega Muñoz
+- Jeimy Alejandra Yaya Martinez
+
+**Curso:** TDSE 2026-1
+
+---
+
+Plataforma analítica multi-tenant para valoración inmobiliaria residencial en Bogotá, Colombia. Sirve simultáneamente a múltiples organizaciones (bancos, portales inmobiliarios) sobre una infraestructura compartida con aislamiento de datos por cliente mediante schema-per-tenant en PostgreSQL, y expone los modelos a clientes B2B a través de una API REST y un dashboard institucional.
+
+---
+
+## Despliegue en producción (Azure)
+
+| Componente | URL |
+|---|---|
+| Dashboard Streamlit | https://smarthome-dashboard.azurewebsites.net |
+| API B2B — Swagger UI | https://smarthome-api-b2b.azurewebsites.net/docs |
+| API B2B — Endpoint | https://smarthome-api-b2b.azurewebsites.net/valorar |
+| PostgreSQL | smarthome-pg.postgres.database.azure.com:5432 |
+
 
 ---
 
@@ -8,47 +29,108 @@ Plataforma analítica multi-tenant para valoración inmobiliaria residencial en 
 
 | Modelo | Propósito | R² | RMSE | MAE |
 |---|---|---|---|---|
-| XGBoost Venta | Predice precio de mercado para inmuebles en venta | 0.9375 | 91,414,842 COP | 37,710,680 COP |
+| XGBoost Venta | Predice precio de mercado para inmuebles en venta | 0.9604 | ~78 M COP | ~29 M COP |
 | XGBoost Arriendo | Predice precio de mercado para inmuebles en arriendo | 0.8480 | 1,131,019 COP | 359,988 COP |
 
 Entrenados con partición **70% train / 15% validación / 15% test** sobre el dataset `SmartHome_Valuator_Dataset_CLEAN.csv` (propiedades de Bogotá).
 
-El **módulo TCO** (Total Cost of Ownership) calcula el costo anual de habitar un inmueble:
+### Features del modelo (14 variables estructurales y locacionales)
+
+| Categoría | Variables |
+|---|---|
+| Físicas | Área (m²), Habitaciones, Baños, Antigüedad (años), Parqueadero, Depósito |
+| Locacionales | Estrato, Latitud, Longitud, Localidad, UPZ, Tipo Inmueble |
+| Entorno | Hurto Res./100k hab, Índice Seguridad (0–10) |
+
+> Los costos de servicios públicos (energía, acueducto, administración) se excluyen del modelo para evitar correlación espuria con el estrato. Solo se usan para el cálculo del TCO.
+
+### Módulo TCO
 
 ```
-TCO anual = (acueducto + energía) × 12 + administración × 12 + precio × factor_riesgo_seguridad
+TCO anual = (acueducto + energía) × 12
+          + administración × 12
+          + precio_estimado × (10 − índice_seguridad) / 100
 ```
+
+Los costos mensuales se estiman automáticamente por estrato según referencias de Bogotá.
 
 ---
 
 ## Arquitectura
 
+### Despliegue en Azure
+
 ```
-┌─────────────────────────────────────────────────────┐
-│                   Docker Compose                    │
-│                                                     │
-│  ┌──────────┐   ┌────────────┐   ┌───────────────┐ │
-│  │ postgres │   │ etl_service│   │   ml_service  │ │
-│  │  :5433   │◄──│  (job)     │   │    :8001      │ │
-│  └──────────┘   └────────────┘   └───────┬───────┘ │
-│       ▲                                  ▲         │
-│       │         ┌────────────────────────┘         │
-│       └─────────┤      api_service :8000            │
-│                 └────────────────────────────────── │
-└─────────────────────────────────────────────────────┘
-         ▲                      ▲
-   tenant_a.py            tenant_b.py
-   (banco, 50 req)    (portal, 80 req)
+Tenants
+  ├── Banco Nacional ──────────────────────────────────────────┐
+  └── Portal Inmobiliario ──────────────────────────────────── HTTPS
+                                                               ▼
+                                              ┌─────────────────────────┐
+                                              │   Azure App Service      │
+                                              │   API B2B (FastAPI)      │
+                                              │   x-tenant-id auth       │
+                                              │   /valorar + TCO         │
+                                              └────────────┬────────────┘
+                                                           │
+                              ┌────────────────────────────┘
+                              │
+              ┌───────────────▼───────────────────────┐
+              │         Azure Container Apps           │
+              │  ┌─────────────┐  ┌────────────────┐  │
+              │  │ ML Service  │  │  ETL Service   │  │
+              │  │ XGBoost·TCO │  │ Pipeline·feat. │  │
+              │  └─────────────┘  └───────┬────────┘  │
+              └──────────────────────────-┼────────────┘
+                                          │ schema_tenant
+                              ┌───────────▼────────────┐
+                              │  PostgreSQL Flexible    │
+                              │  Multi-tenant schemas   │
+                              └────────────────────────┘
 ```
 
-### Servicios
+### Ejecución local (Docker Compose)
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                       Docker Compose                         │
+│                                                              │
+│  ┌──────────┐   ┌────────────┐   ┌──────────────────────┐   │
+│  │ postgres │   │ etl_service│   │      ml_service       │   │
+│  │  :5433   │◄──│  (job)     │   │        :8001          │   │
+│  └──────────┘   └────────────┘   └──────────┬───────────┘   │
+│       ▲                                     ▲               │
+│       └─────────────┬───────────────────────┘               │
+│                     │  api_service :8000                     │
+│                     └──────────────────────────────────────  │
+└──────────────────────────────────────────────────────────────┘
+         ▲                        ▲
+   tenant_a.py              tenant_b.py
+   (banco, 50 req)      (portal, 80 req)
+
+─────────────────────────────────────────────────
+              Capa de Exposición B2B
+─────────────────────────────────────────────────
+  api.py (FastAPI :8082) ◄── dashboard.py (Streamlit)
+  • Header X-Tenant-ID         • Interfaz institucional
+  • Endpoint /valorar           • Gráfico TCO (Plotly)
+  • Respuesta con TCO detallado • Costos por estrato
+```
+
+### Servicios Docker
 
 | Servicio | Puerto | Rol |
 |---|---|---|
 | `postgres` | 5433 (host) | Base de datos con schemas por tenant |
 | `etl_service` | — | Job único: limpia el CSV y carga datos en PostgreSQL |
-| `ml_service` | 8001 | Inferencia XGBoost + cálculo TCO |
-| `api_service` | 8000 | Gateway: autenticación, routing, persistencia |
+| `ml_service` | 8001 | Inferencia XGBoost (carga modelos .pkl) |
+| `api_service` | 8000 | Gateway interno: autenticación, routing, persistencia |
+
+### Capa de Exposición B2B (fuera de Docker)
+
+| Componente | Puerto | Rol |
+|---|---|---|
+| `api.py` | 8082 | API B2B pública — autenticación por X-Tenant-ID, /valorar, Swagger |
+| `dashboard.py` | 8501 | Dashboard Streamlit institucional para usuarios finales |
 
 ### Multi-tenancy
 
@@ -57,25 +139,31 @@ Patrón **schema-per-tenant** en PostgreSQL:
 ```
 smarthouse_valuator
 ├── shared_data.propiedades      ← datos del ETL (compartido, solo lectura)
-├── schema_tenant_a.solicitudes  ← exclusivo banco
-└── schema_tenant_b.solicitudes  ← exclusivo portal inmobiliario
+├── schema_tenant_a.solicitudes  ← exclusivo Banco Nacional
+└── schema_tenant_b.solicitudes  ← exclusivo Portal Inmobiliario
 ```
 
-Cada request se identifica con un header `X-API-Key`. Un tenant no puede acceder a los datos del otro bajo ninguna circunstancia.
+Autenticación B2B mediante header `X-Tenant-ID`. Un tenant no puede acceder a los datos del otro bajo ninguna circunstancia.
 
 ---
 
 ## Stack tecnológico
 
 - **Python 3.11** — todos los servicios
-- **FastAPI** — API Gateway y ML Service
-- **XGBoost 3.x** — modelos de predicción de precios
-- **scikit-learn** — preprocesamiento y métricas
+- **FastAPI** — API Gateway, ML Service y B2B API
+- **Streamlit 1.57** — dashboard institucional B2B
+- **Plotly** — visualización interactiva del TCO
+- **XGBoost 3.2** — modelos de predicción de precios
+- **scikit-learn 1.6** — preprocesamiento y métricas
 - **pandas** — ETL y manipulación de datos
 - **joblib** — serialización de modelos
 - **psycopg2** — conexión a PostgreSQL
 - **PostgreSQL 15** — base de datos multi-tenant
-- **Docker + Docker Compose** — orquestación
+- **Docker + Docker Compose** — orquestación local
+- **Azure App Service** — hosting API B2B y Dashboard en producción
+- **Azure Container Apps** — orquestación de servicios ML y ETL
+- **Azure Container Registry** — almacenamiento de imágenes Docker
+- **Azure Database for PostgreSQL Flexible Server** — base de datos en producción
 
 ---
 
@@ -83,20 +171,30 @@ Cada request se identifica con un header `X-API-Key`. Un tenant no puede acceder
 
 ```
 smarthome-valuator/
+├── api.py                          # API B2B pública (FastAPI)
+├── dashboard.py                    # Dashboard Streamlit institucional
+├── train_reduced.py                # Script de reentrenamiento (features reducidas)
+├── startup.sh                      # Script de inicio para Azure App Service (API)
+├── startup-dashboard.sh            # Script de inicio para Azure App Service (Dashboard)
 ├── docker-compose.yml
 ├── .env.example
+├── .streamlit/
+│   └── config.toml                 # Tema visual del dashboard
 ├── data/
 │   ├── raw/
 │   │   └── SmartHome_Valuator_Dataset_CLEAN.csv
 │   └── processed/
+├── docs/
+│   ├── azure-deployment.md         # Guía de despliegue en Azure
+│   └── resultados-evaluacion.md    # Resultados y conclusiones del artículo
 ├── notebooks/
 │   └── 01_eda_and_training.ipynb   # EDA + entrenamiento XGBoost
 ├── services/
-│   ├── etl/                        # Pipeline ETL (job único)
+│   ├── etl/
 │   │   ├── Dockerfile
 │   │   ├── requirements.txt
 │   │   └── main.py
-│   ├── ml/                         # Inferencia XGBoost + TCO
+│   ├── ml/
 │   │   ├── Dockerfile
 │   │   ├── requirements.txt
 │   │   ├── main.py
@@ -105,15 +203,15 @@ smarthome-valuator/
 │   │       ├── xgboost_arriendo.pkl
 │   │       ├── encoders_venta.pkl
 │   │       └── encoders_arriendo.pkl
-│   └── api/                        # Gateway, autenticación, routing
+│   └── api/
 │       ├── Dockerfile
 │       ├── requirements.txt
 │       └── main.py
 ├── database/
 │   └── init.sql
 ├── tenants/
-│   ├── tenant_a.py                 # Simula banco (50 req concurrentes)
-│   └── tenant_b.py                 # Simula portal (80 req concurrentes)
+│   ├── tenant_a.py                 # Simula Banco Nacional (50 req concurrentes)
+│   └── tenant_b.py                 # Simula Portal Inmobiliario (80 req concurrentes)
 └── monitoring/
     └── report.py
 ```
@@ -124,51 +222,64 @@ smarthome-valuator/
 
 - Docker Desktop instalado y corriendo
 - Python 3.11+
-- Dependencias locales (para notebook y scripts de tenants):
+- Entorno virtual activado:
 
-```bash
-pip install pandas numpy matplotlib seaborn scikit-learn xgboost joblib httpx psycopg2-binary python-dotenv
+```powershell
+python -m venv .venv
+.venv\Scripts\activate        # Windows
+source .venv/bin/activate     # Linux/Mac
+pip install -r services/ml/requirements.txt
+pip install streamlit plotly requests
 ```
 
 ---
 
-## Cómo ejecutar
+## Cómo ejecutar (local)
 
 ### 1. Configurar variables de entorno
 
-```bash
+```powershell
 cp .env.example .env
+# Editar .env con las credenciales de PostgreSQL
 ```
 
-### 2. Entrenar los modelos (una sola vez)
+### 2. Entrenar los modelos
 
-Abrir y ejecutar completamente el notebook:
-
-```bash
+```powershell
+# Opción A — notebook
 jupyter notebook notebooks/01_eda_and_training.ipynb
+
+# Opción B — script directo
+python train_reduced.py
 ```
 
-Kernel → Restart & Run All. Al finalizar se generan los 4 artefactos en `services/ml/models/`.
+Al finalizar se generan 4 artefactos en `services/ml/models/`.
 
-### 3. Levantar la infraestructura
+### 3. Levantar la infraestructura Docker
 
-```bash
+```powershell
 docker compose up --build
 ```
 
-Esperar hasta que `api_service` y `ml_service` estén corriendo (≈ 3-5 min la primera vez).
+### 4. Iniciar la API B2B pública
 
-### 4. Verificar que la API responde
-
-```bash
-curl http://localhost:8000/health
+```powershell
+uvicorn api:app --host 0.0.0.0 --port 8082 --reload
 ```
 
-Respuesta esperada: `{"status":"ok"}`
+Swagger UI disponible en: `http://localhost:8082/docs`
 
-### 5. Ejecutar los tenants simultáneamente
+### 5. Iniciar el dashboard
 
-```bash
+```powershell
+streamlit run dashboard.py
+```
+
+Dashboard disponible en: `http://localhost:8501`
+
+### 6. Ejecutar los tenants simultáneamente (prueba de carga)
+
+```powershell
 # Terminal 1
 python tenants/tenant_a.py
 
@@ -176,20 +287,15 @@ python tenants/tenant_a.py
 python tenants/tenant_b.py
 ```
 
-### 6. Ver el reporte de métricas
-
-```bash
-POSTGRES_HOST=localhost POSTGRES_PORT=5433 python monitoring/report.py
-```
-
 ---
 
-## Endpoints de la API
+## Endpoints de la API B2B
 
-### `POST /avaluo`
-Solicita la valoración de un inmueble.
+### `POST /valorar`
 
-**Header:** `X-API-Key: key-tenant-a` o `key-tenant-b`
+Valora un inmueble y calcula el TCO.
+
+**Header requerido:** `x-tenant-id: tenant_a` o `tenant_b`
 
 **Body:**
 ```json
@@ -208,59 +314,55 @@ Solicita la valoración de un inmueble.
   "parqueadero": 1,
   "deposito": 0,
   "indice_seguridad": 6.5,
+  "hurto_res_100k": 150,
   "acueducto_mes": 120000,
   "energia_mes": 180000,
-  "admin_mensual": 500000
+  "admin_mensual": 400000
 }
 ```
 
 **Respuesta:**
 ```json
 {
-  "precio_estimado": 450000000,
-  "tco_anual": 12840000,
   "tenant_id": "tenant_a",
-  "latencia_ms": 45
+  "tenant_nombre": "Banco Nacional",
+  "tipo_operacion": "Venta",
+  "precio_estimado": 461120544.0,
+  "tco_anual": 24539219.04,
+  "tco_detalle": {
+    "servicios_anuales": 3600000.0,
+    "admin_anual": 4800000.0,
+    "riesgo_desvalorizacion": 16139219.04,
+    "total": 24539219.04
+  }
 }
 ```
 
-### `GET /metrics`
-Resumen de solicitudes y latencias por tenant.
+### `GET /`
 
-```json
-{
-  "tenant_a": { "total_requests": 51, "avg_latency_ms": 180.1 },
-  "tenant_b": { "total_requests": 80, "avg_latency_ms": 205.1 }
-}
-```
+Estado de la API y modelos disponibles.
 
 ---
 
-## Resultados del experimento de concurrencia
+## Resultados del experimento de concurrencia (Azure)
 
-| Métrica | Tenant A (Banco) | Tenant B (Portal) |
+| Métrica | Tenant A (Banco Nacional) | Tenant B (Portal Inmobiliario) |
 |---|---|---|
 | Solicitudes enviadas | 50 | 80 |
 | Exitosas | 50 | 80 |
 | Fallidas | 0 | 0 |
-| Latencia promedio | ~90 ms | ~76 ms |
-| Latencia máxima | ~203 ms | ~201 ms |
-| Throughput | ~3.3 req/s | ~5.8 req/s |
-| Precio promedio Venta | 122,400,523 COP | 109,425,850 COP |
-| Precio promedio Arriendo | — | 660,136 COP |
-| TCO anual promedio | 13,621,549 COP | 9,744,826 COP |
+| Precio promedio | $420,520,645 COP | $188,753,924 COP |
+| Throughput | 5.6 req/s | 7.3 req/s |
 
-**Aislamiento verificado:** los registros de cada tenant quedaron exclusivamente en su propio schema de PostgreSQL (schema_tenant_a y schema_tenant_b).
+**Aislamiento verificado:** los registros de cada tenant quedan exclusivamente en su propio schema de PostgreSQL (`schema_tenant_a` y `schema_tenant_b`).
 
-> **Nota sobre el modelo Venta:** XGBoost asignó ~40% de importancia a `Energía Eléctrica (COP/mes)`, lo que genera extrapolaciones fuera del rango real para propiedades de estrato 2-3 con facturas bajas. Se aplica un piso de 50 M COP en el ML Service para garantizar predicciones válidas.
+### Predicciones por estrato (modelo Venta)
 
----
-
-## Fuera del alcance (trabajo futuro)
-
-- Frontend o dashboard visual
-- Reentrenamiento automático periódico del modelo
-- Onboarding automatizado de nuevos tenants
-- Integración en tiempo real con fuentes externas (SIEDCO, CREG)
-- Pipeline CI/CD
-- Despliegue en nube (Azure)
+| Estrato | Precio estimado |
+|---|---|
+| 1 | ~103 M COP |
+| 2 | ~145 M COP |
+| 3 | ~249 M COP |
+| 4 | ~461 M COP |
+| 5 | ~1,070 M COP |
+| 6 | ~1,790 M COP |

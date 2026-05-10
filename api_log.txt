@@ -1,0 +1,2 @@
+[API] Modelos cargados: ['venta', 'arriendo']
+INFO:     127.0.0.1:56910 - "GET / HTTP/1.1" 200 OK
