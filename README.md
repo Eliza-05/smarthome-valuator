@@ -344,17 +344,43 @@ Estado de la API y modelos disponibles.
 
 ---
 
-## Resultados del experimento de concurrencia (Azure)
+## Resultados de evaluación (Azure)
 
-| Métrica | Tenant A (Banco Nacional) | Tenant B (Portal Inmobiliario) |
+> Documento completo: [`docs/resultados-evaluacion.md`](docs/resultados-evaluacion.md)
+
+### Modelos de predicción
+
+| Modelo | R² | RMSE | MAE |
+|---|---|---|---|
+| XGBoost Venta | **0.9604** | ~78 M COP | ~29 M COP |
+| XGBoost Arriendo | **0.8480** | 1,131,019 COP | 359,988 COP |
+
+### Pruebas de concurrencia multi-tenant
+
+| Métrica | Tenant A — Banco Nacional | Tenant B — Portal Inmobiliario |
 |---|---|---|
-| Solicitudes enviadas | 50 | 80 |
-| Exitosas | 50 | 80 |
+| Solicitudes enviadas | 200 | 500 |
+| Exitosas | 200 | 500 |
 | Fallidas | 0 | 0 |
-| Precio promedio | $420,520,645 COP | $188,753,924 COP |
-| Throughput | 5.6 req/s | 7.3 req/s |
+| Tasa de éxito | 100% | 100% |
+| Precio estimado promedio | $416,553,392 COP | $220,748,647 COP |
+| Throughput | 6.5 req/s | 5.0 req/s |
+| Latencia promedio | 28,225 ms | 77,668 ms |
+| Latencia p95 | 30,372 ms | 97,972 ms |
 
 **Aislamiento verificado:** los registros de cada tenant quedan exclusivamente en su propio schema de PostgreSQL (`schema_tenant_a` y `schema_tenant_b`).
+
+### Stress test progresivo
+
+| Oleada | Requests | Tasa éxito | Throughput | Latencia p95 | Estado |
+|---|---|---|---|---|---|
+| 1 | 50 | 100% | 5.9 req/s | 8,426 ms | ✅ OK |
+| 2 | 100 | 100% | 4.9 req/s | 19,673 ms | ✅ OK |
+| 3 | 200 | 99.0% | 7.2 req/s | 21,172 ms | ✅ OK |
+| 4 | 400 | 100% | 6.0 req/s | 62,808 ms | ✅ OK |
+| 5 | 800 | 90.9% | 5.9 req/s | 93,115 ms | ⚠️ DEGRADADO |
+
+El sistema mantiene estabilidad hasta ~400 requests estrictamente simultáneos. La degradación en 800 requests se debe al límite de la instancia única (plan B1); con auto-scaling horizontal escala sin modificar el código.
 
 ### Predicciones por estrato (modelo Venta)
 

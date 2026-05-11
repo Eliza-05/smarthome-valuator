@@ -7,7 +7,7 @@ import pandas as pd
 
 API_URL = "https://smarthome-api-b2b.azurewebsites.net"
 HEADERS = {"x-tenant-id": "tenant_a"}
-NUM_REQUESTS = 50
+NUM_REQUESTS = 200
 
 DATASET_PATH = "data/processed/SmartHome_Valuator_Dataset_CLEAN_processed.csv"
 
@@ -49,13 +49,16 @@ lock = threading.Lock()
 
 
 def send_request(payload: dict) -> None:
+    t0 = time.perf_counter()
     try:
         resp = httpx.post(f"{API_URL}/valorar", json=payload, headers=HEADERS, timeout=30)
+        latencia = (time.perf_counter() - t0) * 1000
         with lock:
-            results.append({"ok": resp.status_code == 200, "precio": resp.json().get("precio_estimado", 0)})
+            results.append({"ok": resp.status_code == 200, "precio": resp.json().get("precio_estimado", 0), "latencia_ms": latencia})
     except Exception as e:
+        latencia = (time.perf_counter() - t0) * 1000
         with lock:
-            results.append({"ok": False, "precio": 0, "error": str(e)})
+            results.append({"ok": False, "precio": 0, "latencia_ms": latencia, "error": str(e)})
 
 
 def main():
@@ -101,6 +104,10 @@ def main():
     fallidos = NUM_REQUESTS - exitosos
     precios = [r["precio"] for r in results if r["ok"] and r["precio"]]
     avg_precio = sum(precios) / len(precios) if precios else 0
+    latencias = sorted(r["latencia_ms"] for r in results if "latencia_ms" in r)
+    avg_lat = sum(latencias) / len(latencias) if latencias else 0
+    max_lat = max(latencias) if latencias else 0
+    p95_lat = latencias[int(len(latencias) * 0.95)] if latencias else 0
 
     print("\n=== Tenant A (Banco) — Resumen ===")
     print(f"  Total requests  : {NUM_REQUESTS}")
@@ -108,6 +115,9 @@ def main():
     print(f"  Fallidos        : {fallidos}")
     print(f"  Precio prom.    : ${avg_precio:,.0f} COP")
     print(f"  Throughput      : {NUM_REQUESTS / elapsed:.1f} req/s")
+    print(f"  Latencia prom.  : {avg_lat:.0f} ms")
+    print(f"  Latencia p95    : {p95_lat:.0f} ms")
+    print(f"  Latencia máx.   : {max_lat:.0f} ms")
 
 
 if __name__ == "__main__":
